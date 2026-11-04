@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#111827">
+<title>Scratch Card Scanner</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{--bg:#f4f5f7;--card:#fff;--ink:#111827;--muted:#6b7280;--line:#e5e7eb;
+    --blue:#2563eb;--blue-soft:#dbeafe;--green:#16a34a;--green-soft:#dcfce7;--accent:#111827;--danger:#dc2626;--warn:#b45309;--r:14px}
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Lao",sans-serif;background:var(--bg);color:var(--ink);font-size:16px}
+  header{position:sticky;top:0;z-index:20;background:var(--accent);color:#fff;padding:10px 14px 0}
+  header h1{margin:0 0 6px;font-size:17px;font-weight:650}
+  .tabs{display:flex}
+  .tab{flex:1;background:none;border:0;color:#9ca3af;font:inherit;font-weight:600;padding:9px 0 11px;border-bottom:3px solid transparent;cursor:pointer}
+  .tab.active{color:#fff;border-bottom-color:#fff}
+  main{max-width:720px;margin:0 auto;padding:12px}
+  .card{background:var(--card);border-radius:var(--r);padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  h3{margin:14px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  h3:first-child{margin-top:0}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit;font-weight:600;padding:11px 14px;border-radius:12px;cursor:pointer;user-select:none;text-decoration:none}
+  .btn:active{transform:scale(.98)}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--green);color:#fff;border-color:var(--green)}
+  .btn.stop{background:var(--danger);color:#fff;border-color:var(--danger)}
+  .btn.big{padding:15px 16px;font-size:17px}
+  .btn.full{width:100%}
+  .btn.sm{padding:6px 10px;font-size:13px;border-radius:9px}
+  .btn:disabled{opacity:.5}
+  .seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#e5e7eb;padding:4px;border-radius:12px;margin-bottom:12px}
+  .seg button{border:0;background:none;font:inherit;font-weight:650;padding:10px;border-radius:9px;color:var(--muted);cursor:pointer}
+  .seg button.sel{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.1)}
+  /* camera */
+  .cam{position:relative;width:100%;aspect-ratio:3/4;max-height:62vh;background:#000;border-radius:var(--r);overflow:hidden}
+  .cam video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .cam canvas{position:absolute;inset:0;width:100%;height:100%}
+  .cam .pill{position:absolute;left:50%;top:12px;transform:translateX(-50%);background:rgba(17,24,39,.8);color:#fff;padding:7px 14px;border-radius:999px;font-size:14px;font-weight:600;white-space:nowrap;max-width:92%;overflow:hidden;text-overflow:ellipsis}
+  .cam .camctl{position:absolute;right:10px;bottom:10px;display:flex;gap:8px}
+  .cam .camctl button{width:44px;height:44px;border-radius:50%;border:0;background:rgba(17,24,39,.75);color:#fff;font-size:20px;cursor:pointer}
+  .cam .camctl button.on{background:#facc15;color:#111}
+  .cam .off{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#d1d5db;text-align:center;padding:20px;gap:12px}
+  .flash{animation:flash .45s}
+  @keyframes flash{0%{box-shadow:inset 0 0 0 999px rgba(22,163,74,.45)}100%{box-shadow:inset 0 0 0 999px rgba(22,163,74,0)}}
+  .controls{display:flex;gap:8px;margin-top:10px}
+  .controls .btn{flex:1}
+  /* pending */
+  #pending{border:2px solid var(--accent)}
+  .ptop{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .badge{background:#f3f4f6;color:#374151;padding:6px 10px;border-radius:9px;font-weight:750;font-size:14px;cursor:pointer;border:0;font-family:inherit}
+  .badge.BLUE{background:var(--blue-soft);color:var(--blue)} .badge.GREEN{background:var(--green-soft);color:var(--green)}
+  .badge.NONE{background:#fee2e2;color:var(--danger)}
+  #pSerial{flex:1;min-width:0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px;font-weight:750;letter-spacing:1px;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+  .bar{height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin:4px 0 10px}
+  .bar i{display:block;height:100%;background:var(--accent);width:100%;transition:width .1s linear}
+  .prize-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .prize-btn{border:1px solid var(--line);background:#fff;border-radius:10px;padding:11px 2px;font:inherit;font-size:14px;font-weight:650;cursor:pointer}
+  .prize-btn.none{background:#f3f4f6}
+  .prize-btn.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+  /* session list */
+  .sess-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .sess-stats{font-size:13px;color:var(--muted)}
+  .item{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .item:last-child{border-bottom:0}
+  .item .main{flex:1;min-width:0}
+  .item .serial{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700}
+  .item .meta{font-size:12px;color:var(--muted)}
+  .item select{font:inherit;font-size:14px;padding:6px;border:1px solid var(--line);border-radius:8px;background:#fff;max-width:118px}
+  .st{font-size:12px;font-weight:650}
+  .st.ok{color:var(--green)} .st.warn{color:var(--warn)} .st.err{color:var(--danger)} .st.wait{color:var(--muted)}
+  .fix{display:flex;gap:6px;margin-top:6px}
+  .fix input{flex:1;min-width:0}
+  .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px;background:#9ca3af}
+  .dot.BLUE{background:var(--blue)} .dot.GREEN{background:var(--green)}
+  input[type=text],input[type=number],input[type=url],input[type=password],select.full{width:100%;font:inherit;padding:11px;border:1px solid var(--line);border-radius:10px;background:#fff}
+  label.f{display:block;font-size:14px;font-weight:600;margin:12px 0 6px}
+  .check{display:flex;align-items:center;gap:8px;margin:12px 0;font-size:15px}
+  .check input{width:20px;height:20px}
+  /* dashboard */
+  .chips{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px}
+  .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:8px 14px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .chip.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}
+  .kpi{background:var(--card);border-radius:var(--r);padding:13px}
+  .kpi .l{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .kpi .v{font-size:21px;font-weight:750;margin-top:4px;font-variant-numeric:tabular-nums}
+  .kpi.wide{grid-column:span 2}
+  .pos{color:var(--green)} .neg{color:var(--danger)}
+  .types{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .tcard{background:var(--card);border-radius:var(--r);padding:13px;border-top:5px solid}
+  .tcard.BLUE{border-color:var(--blue)} .tcard.GREEN{border-color:var(--green)}
+  .tcard h4{margin:0 0 8px;font-size:15px}
+  .tcard dl{margin:0;display:grid;grid-template-columns:auto auto;gap:4px 8px;font-size:14px}
+  .tcard dt{color:var(--muted)} .tcard dd{margin:0;text-align:right;font-weight:650;font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:8px 4px;border-bottom:1px solid var(--line)}
+  th{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .link{color:var(--blue);text-decoration:none;font-size:13px}
+  .del{background:none;border:0;color:var(--danger);font:inherit;font-size:13px;cursor:pointer;padding:0 0 0 8px}
+  .empty{color:var(--muted);text-align:center;padding:20px 0}
+  .chart-box{position:relative;height:230px}
+  .notice{background:#fef3c7;color:#78350f;border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:12px}
+  #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(140px);background:#111827;color:#fff;padding:12px 18px;border-radius:12px;font-weight:600;transition:transform .25s;z-index:50;max-width:92vw;text-align:center}
+  #toast.show{transform:translateX(-50%) translateY(0)} #toast.err{background:var(--danger)}
+  #modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:60;padding:20px}
+  #modal.show{display:flex}
+  #modal .box{background:#fff;border-radius:16px;padding:20px;max-width:380px;width:100%}
+  #modal h4{margin:0 0 8px;font-size:18px} #modal p{margin:0 0 14px;color:#374151}
+  #modal .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+  .spinner{display:inline-block;width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media(min-width:600px){.kpis{grid-template-columns:repeat(4,1fr)}.kpi.wide{grid-column:span 1}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎟️ Scratch Card Scanner</h1>
+  <nav class="tabs">
+    <button class="tab active" data-view="scanView">Scan</button>
+    <button class="tab" data-view="dashView">Dashboard</button>
+    <button class="tab" data-view="setView">Settings</button>
+  </nav>
+</header>
+
+<main>
+<!-- ================================ SCAN ================================ -->
+<section id="scanView">
+  <div id="setupNotice" class="notice" hidden>Open <b>Settings</b> and enter your access key first.</div>
+
+  <div class="seg" id="modeSeg">
+    <button data-mode="live" class="sel">📹 Live auto-scan</button>
+    <button data-mode="photos">🖼️ Photos (batch)</button>
+  </div>
+
+  <div id="liveMode">
+    <div class="cam" id="cam">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="pill" id="pill" hidden></div>
+      <div class="camctl" id="camctl" hidden>
+        <button id="torchBtn" title="Flashlight" hidden>🔦</button>
+      </div>
+      <div class="off" id="camOff">
+        <div style="font-size:42px">📷</div>
+        <div>Tap <b>Start scanning</b>, then hold each card inside the frame.<br>Cards are read and saved automatically.</div>
+      </div>
+    </div>
+    <div class="controls">
+      <button class="btn go big" id="startBtn">▶ Start scanning</button>
+    </div>
+  </div>
+
+  <div id="photoMode" hidden>
+    <div class="card">
+      <label class="btn primary big full">Select photos (choose many at once)
+        <input type="file" accept="image/*" multiple id="photoInput" hidden>
+      </label>
+      <p class="hint">Snap all your cards with the phone camera first, then select them all here. Each photo is read and saved automatically. Photos it can't read go into the list below so you can type the serial.</p>
+      <div class="hint" id="batchStatus"></div>
+    </div>
+  </div>
+
+  <!-- capture waiting to be saved -->
+  <div class="card" id="pending" hidden>
+    <div class="ptop">
+      <button class="badge" id="pType" title="Tap to switch colour"></button>
+      <input id="pSerial" autocomplete="off" autocapitalize="characters">
+    </div>
+    <div class="bar"><i id="pBar"></i></div>
+    <div class="prize-grid" id="pPrizes"></div>
+    <div class="controls">
+      <button class="btn sm" id="pHold">⏸ Hold</button>
+      <button class="btn sm" id="pDiscard">✕ Discard</button>
+      <button class="btn sm primary" id="pSave">Save now</button>
+    </div>
+    <p class="hint" id="pHint">Saves as <b>No win</b> automatically. Tap a prize if this card won.</p>
+  </div>
+
+  <div class="card">
+    <div class="sess-head"><h3 style="margin:0">This session</h3><span class="sess-stats" id="sessStats"></span></div>
+    <div id="sessList"><div class="empty">Scanned cards will appear here.</div></div>
+  </div>
+</section>
+
+<!-- ============================== DASHBOARD ============================== -->
+<section id="dashView" hidden>
+  <div class="chips">
+    <button class="chip" data-range="today">Today</button>
+    <button class="chip sel" data-range="7d">7 days</button>
+    <button class="chip" data-range="30d">30 days</button>
+    <button class="chip" data-range="all">All time</button>
+  </div>
+  <div class="kpis">
+    <div class="kpi"><div class="l">Cards scanned</div><div class="v" id="kCount">–</div></div>
+    <div class="kpi"><div class="l">Spent</div><div class="v" id="kSpent">–</div></div>
+    <div class="kpi"><div class="l">Prizes won</div><div class="v" id="kWon">–</div></div>
+    <div class="kpi"><div class="l">Net</div><div class="v" id="kNet">–</div></div>
+    <div class="kpi"><div class="l">Winning cards</div><div class="v" id="kWinners">–</div></div>
+    <div class="kpi"><div class="l">Win rate</div><div class="v" id="kRate">–</div></div>
+    <div class="kpi wide"><div class="l">Biggest prize</div><div class="v" id="kBig">–</div></div>
+  </div>
+  <div class="types" id="typeCards"></div>
+  <div class="card"><h3>Spent vs won per day</h3><div class="chart-box"><canvas id="dailyChart"></canvas></div></div>
+  <div class="card"><h3>Prizes by amount</h3><div id="tiers"></div></div>
+  <div class="card"><h3>Recent scans</h3><div id="recent"></div></div>
+  <p class="hint" style="text-align:center"><span id="updated"></span> · <a class="link" id="sheetLink" href="#" target="_blank">Open Google Sheet</a></p>
+</section>
+
+<!-- =============================== SETTINGS =============================== -->
+<section id="setView" hidden>
+  <div class="card">
+    <h3>Connection</h3>
+    <div id="urlWrap">
+      <label class="f" for="sUrl">Backend URL (your Apps Script web app /exec link)</label>
+      <input type="url" id="sUrl" placeholder="https://script.google.com/macros/s/…/exec">
+    </div>
+    <label class="f" for="sKey">Access key (shown when you ran setup)</label>
+    <input type="password" id="sKey" autocomplete="off">
+    <div class="controls"><button class="btn" id="testBtn">Test connection</button></div>
+    <div class="hint" id="testResult"></div>
+  </div>
+  <div class="card">
+    <h3>Scanning</h3>
+    <label class="f" for="sName">Your name</label>
+    <input type="text" id="sName" placeholder="Saved in the 'Scanned By' column">
+    <label class="f" for="sDelay">Auto-save after capture</label>
+    <select class="full" id="sDelay">
+      <option value="0">Instantly (fastest)</option>
+      <option value="2">After 2 seconds</option>
+      <option value="3">After 3 seconds</option>
+      <option value="5">After 5 seconds</option>
+      <option value="-1">Never — I tap Save each time</option>
+    </select>
+    <label class="f" for="sShape">Card shape (as you hold it)</label>
+    <select class="full" id="sShape">
+      <option value="portrait">Portrait (tall)</option>
+      <option value="landscape">Landscape (wide)</option>
+    </select>
+    <label class="check"><input type="checkbox" id="sPhoto"> Save a photo of each card to Google Drive</label>
+    <label class="check"><input type="checkbox" id="sSound"> Beep and vibrate on each capture</label>
+  </div>
+  <div class="card">
+    <h3>Share with staff</h3>
+    <p class="hint" style="margin-top:0">Send this link to staff phones. Opening it fills in the URL and key automatically.</p>
+    <div class="controls"><button class="btn" id="copyLink">Copy setup link</button></div>
+  </div>
+</section>
+</main>
+
+<div id="toast"></div>
+<div id="modal"><div class="box">
+  <h4 id="mTitle"></h4><p id="mText"></p><div id="mExtra"></div>
+  <div class="actions"><button class="btn" id="mCancel">Cancel</button><button class="btn primary" id="mOk">OK</button></div>
+</div></div>
+
+<script>
+/* ======================= Settings you can change in code ======================= */
+const CARD = { BLUE: { label: 'Blue', price: 5000 }, GREEN: { label: 'Green', price: 10000 } };
+// Prize buttons per card type (Kip). 0 = no win. Change to match the real prize table.
+const PRIZES = {
+  BLUE:  [0, 5000, 10000, 20000, 50000, 100000, 500000, 1000000],
+  GREEN: [0, 10000, 20000, 50000, 100000, 200000, 1000000, 2000000]
+};
+// Where the serial number sits on the card, as fractions of the card (bottom-left).
+const SERIAL_BOX = { x: 0.02, y: 0.80, w: 0.60, h: 0.18 };
+// Fallback for batch photos when the card's edges can't be found.
+const PHOTO_SERIAL_BOX = { x: 0.02, y: 0.76, w: 0.60, h: 0.22 };
+const CARD_ASPECT = { portrait: 0.64, landscape: 1.56 };   // width / height
+const SERIAL_MIN_LEN = 6, SERIAL_MAX_LEN = 16;             // ignore readings outside this length
+const SERIAL_REGEX = null;                                 // e.g. /^\d{10}$/ to accept only 10-digit serials
+const HUE = { greenMin: 70, split: 172, blueMax: 270 };    // colour boundaries (degrees)
+const MIN_COLOR_FRACTION = 0.15;   // share of the frame that must be blue/green to count as "card present"
+const STABLE_DIFF = 10;            // lower = must hold the phone steadier before reading
+const CHANGE_DIFF = 28;            // how different the view must become before the next card is read
+const CONFIRM_READS = 2;           // same serial must be read this many times in a row before capture
+const FRAME_INTERVAL = 200;        // ms between frames
+
+/* =============================== Basics =============================== */
+const $ = id => document.getElementById(id);
+const fmt = n => Number(n || 0).toLocaleString('en-US') + ' ₭';
+const fmtShort = n => n === 0 ? 'No win' : n >= 1e6 ? (n / 1e6) + 'M' : n >= 1000 ? (n / 1000) + 'k' : String(n);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const isGas = typeof google !== 'undefined' && google.script && google.script.run;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+let memStore = {};
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return memStore[k] ?? null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) { memStore[k] = v; } }
+};
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzVURRWCDP6eagKe4L7Pk2OJCl-M3E0B9gvUcGK3cjgPip3p8QZCl_jtBKHZa3Ab1nh8A/exec';   // your Apps Script /exec link
+const settings = Object.assign({ url: DEFAULT_API_URL, key: '', name: '', delay: '3', shape: 'portrait', photo: false, sound: true },
+  JSON.parse(store.get('lsSettings') || '{}'));
+if (!settings.url) settings.url = DEFAULT_API_URL;
+// Setup link support: ?api=...&key=...
+(() => {
+  const p = new URLSearchParams(location.search);
+  if (p.get('api') || p.get('key')) {
+    if (p.get('api')) settings.url = p.get('api');
+    if (p.get('key')) settings.key = p.get('key');
+    saveSettings();
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
+  }
+})();
+function saveSettings() { store.set('lsSettings', JSON.stringify(settings)); }
+
+function toast(msg, isErr) {
+  const t = $('toast'); t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.className = '', 3000);
+}
+function modal(title, text, okLabel = 'OK', extraHtml = '') {
+  return new Promise(resolve => {
+    $('mTitle').textContent = title; $('mText').textContent = text; $('mOk').textContent = okLabel;
+    $('mExtra').innerHTML = extraHtml; $('modal').classList.add('show');
+    const done = v => { $('modal').classList.remove('show'); $('mOk').onclick = $('mCancel').onclick = null; resolve(v); };
+    $('mOk').onclick = () => done(true); $('mCancel').onclick = () => done(false);
+  });
+}
+
+/* ============================== Backend API ============================== */
+async function api(action, ...args) {
+  const req = { action, key: settings.key, args };
+  if (isGas) {
+    return new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(rej).api(req));
+  }
+  if (!settings.url) throw new Error('Enter the backend URL in Settings.');
+  const r = await fetch(settings.url, {
+    method: 'POST', redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },   // avoids CORS preflight
+    body: JSON.stringify(req)
+  });
+  let j;
+  try { j = await r.json(); } catch (e) { throw new Error('Backend did not answer — check the URL and that access is "Anyone".'); }
+  if (!j.ok) throw new Error(j.error);
+  return j.result;
+}
+
+/* ================================ Tabs ================================ */
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
+  ['scanView', 'dashView', 'setView'].forEach(v => $(v).hidden = v !== b.dataset.view);
+  if (b.dataset.view === 'dashView') loadDashboard();
+  if (b.dataset.view !== 'scanView') stopLive();
+});
+document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('sel', x === b));
+  $('liveMode').hidden = b.dataset.mode !== 'live';
+  $('photoMode').hidden = b.dataset.mode !== 'photos';
+  if (b.dataset.mode !== 'live') stopLive();
+});
+
+/* =========================== Image analysis =========================== */
+/** Dominant saturated hue → BLUE / GREEN. Also returns how much of the image is coloured. */
+function detectCardType(src, margin) {
+  const w = 120, h = Math.max(1, Math.round(src.height * w / src.width));
+  const c = detectCardType.c || (detectCardType.c = document.createElement('canvas'));
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0, w, h);
+  const x0 = Math.floor(w * margin), y0 = Math.floor(h * margin);
+  const cw = Math.max(1, w - 2 * x0), ch = Math.max(1, h - 2 * y0);
+  const d = ctx.getImageData(x0, y0, cw, ch).data;
+  let blue = 0, green = 0, colored = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
+    const sat = max ? delta / max : 0;
+    if (sat < 0.25 || max < 0.2 || delta === 0) continue;
+    let hue;
+    if (max === r) hue = 60 * (((g - b) / delta) % 6);
+    else if (max === g) hue = 60 * ((b - r) / delta + 2);
+    else hue = 60 * ((r - g) / delta + 4);
+    if (hue < 0) hue += 360;
+    const wt = sat * max;
+    if (hue >= HUE.greenMin && hue < HUE.split) { green += wt; colored++; }
+    else if (hue >= HUE.split && hue <= HUE.blueMax) { blue += wt; colored++; }
+  }
+  const fraction = colored / (d.length / 4), sum = blue + green;
+  if (!sum) return { type: null, confidence: 0, fraction: 0 };
+  return { type: blue > green ? 'BLUE' : 'GREEN', confidence: Math.max(blue, green) / sum, fraction };
+}
+
+/** Small greyscale fingerprint, used to wait until the camera is steady. */
+function signature(src) {
+  const c = signature.c || (signature.c = document.createElement('canvas'));
+  c.width = 24; c.height = 24;
+  const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0, 24, 24);
+  const d = ctx.getImageData(0, 0, 24, 24).data, out = new Uint8Array(576);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) out[j] = (d[i] * 3 + d[i + 1] * 6 + d[i + 2]) / 10;
+  return out;
+}
+function sigDiff(a, b) { if (!a || !b) return 255; let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; }
+
+/** Crop a box (fractions) from src, enlarge, Otsu-threshold for OCR. */
+function prepCrop(src, box, invert) {
+  const sx = Math.round(box.x * src.width), sy = Math.round(box.y * src.height);
+  const sw = Math.max(8, Math.round(box.w * src.width)), sh = Math.max(8, Math.round(box.h * src.height));
+  const scale = Math.min(4, Math.max(1, 1200 / sw));
+  const c = document.createElement('canvas');
+  c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+  const hist = new Array(256).fill(0), gray = new Uint8Array(d.length / 4);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) { const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0; gray[j] = g; hist[g]++; }
+  const total = gray.length; let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, best = 0, thr = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue; const wF = total - wB; if (!wF) break;
+    sumB += t * hist[t]; const mB = sumB / wB, mF = (sum - sumB) / wF, between = wB * wF * (mB - mF) ** 2;
+    if (between > best) { best = between; thr = t; }
+  }
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    let v = gray[j] > thr ? 255 : 0; if (invert) v = 255 - v;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+function fixDigits(t) {
+  const digits = (t.match(/\d/g) || []).length;
+  if (t.length && digits / t.length >= 0.6) t = t.replace(/O/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5').replace(/B/g, '8').replace(/Z/g, '2');
+  return t;
+}
+function validSerial(s) { return !!s && s.length >= SERIAL_MIN_LEN && s.length <= SERIAL_MAX_LEN && (!SERIAL_REGEX || SERIAL_REGEX.test(s)); }
+function extractSerial(text) {
+  const cands = [];
+  const isNum = t => t.length > 0 && (t.match(/\d/g) || []).length / t.length >= 0.6;
+  String(text).toUpperCase().split(/\n+/).forEach(line => {
+    const toks = line.replace(/[^A-Z0-9\-\s]/g, ' ').trim().split(/\s+/).filter(Boolean).map(fixDigits);
+    let run = [];
+    const flush = () => { if (run.length > 1) cands.push(run.join('')); run = []; };
+    toks.forEach(t => { cands.push(t); if (isNum(t)) run.push(t); else flush(); });
+    flush();   // serial printed in groups, e.g. "001 234 567"
+  });
+  let best = '', bestScore = -Infinity;
+  cands.forEach(t => {
+    if (!validSerial(t)) return;
+    const digits = (t.match(/\d/g) || []).length, score = digits - 2 * (t.length - digits);
+    if (score > bestScore) { best = t; bestScore = score; }
+  });
+  return best;
+}
+
+let workerP = null;
+function getWorker() {
+  if (!workerP) {
+    workerP = (async () => {
+      if (typeof Tesseract === 'undefined') throw new Error('OCR library did not load (check internet).');
+      const w = await Tesseract.createWorker('eng');
+      await w.setParameters({ tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ- ', tessedit_pageseg_mode: '6' });
+      return w;
+    })();
+    workerP.catch(() => { workerP = null; });
+  }
+  return workerP;
+}
+async function readSerial(src, box) {
+  const w = await getWorker();
+  let best = { serial: '', conf: 0 };
+  for (const inv of [false, true]) {
+    const { data } = await w.recognize(prepCrop(src, box, inv));
+    const s = extractSerial(data.text);
+    if (s && data.confidence > best.conf) best = { serial: s, conf: data.confidence };
+    if (best.conf >= 70) break;
+  }
+  return best;
+}
+function snapshot(src, max = 800) {
+  const s = Math.min(1, max / Math.max(src.width, src.height));
+  const c = document.createElement('canvas'); c.width = Math.round(src.width * s); c.height = Math.round(src.height * s);
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.75);
+}
+
+/* ============================ Feedback ============================ */
+let audioCtx = null;
+function beep(ok = true) {
+  if (!settings.sound) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = ok ? 1320 : 330; g.gain.value = 0.15;
+    o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + (ok ? 0.09 : 0.25));
+  } catch (e) {}
+  try { navigator.vibrate && navigator.vibrate(ok ? 70 : [60, 60, 60]); } catch (e) {}
+}
+
+/* ============================ Live scanning ============================ */
+const video = $('video'), overlay = $('overlay');
+const live = { running: false, stream: null, track: null, timer: null, prevSig: null, cand: null, candCount: 0,
+  lastSerial: null, absent: 0, phase: 'search', wake: null, torch: false, needClear: false, capSig: null };
+const cardCanvas = document.createElement('canvas');
+
+function setPill(text) { const p = $('pill'); p.hidden = !text; p.textContent = text || ''; }
+
+function guideRect() {
+  const cw = overlay.clientWidth, ch = overlay.clientHeight, A = CARD_ASPECT[settings.shape] || 0.64;
+  let gw = cw * 0.84, gh = gw / A;
+  if (gh > ch * 0.84) { gh = ch * 0.84; gw = gh * A; }
+  return { x: (cw - gw) / 2, y: (ch - gh) / 2 + 12, w: gw, h: gh, cw, ch };
+}
+
+function drawOverlay() {
+  const dpr = window.devicePixelRatio || 1, g = guideRect();
+  overlay.width = Math.round(g.cw * dpr); overlay.height = Math.round(g.ch * dpr);
+  const ctx = overlay.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.beginPath(); ctx.rect(0, 0, g.cw, g.ch); ctx.roundRect ? ctx.roundRect(g.x, g.y, g.w, g.h, 12) : ctx.rect(g.x, g.y, g.w, g.h); ctx.fill('evenodd');
+  const color = { search: '#ffffff', steady: '#ffffff', read: '#facc15', got: '#22c55e', same: '#9ca3af' }[live.phase] || '#fff';
+  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(g.x, g.y, g.w, g.h, 12) : ctx.rect(g.x, g.y, g.w, g.h); ctx.stroke();
+  const b = SERIAL_BOX;
+  ctx.setLineDash([6, 5]); ctx.strokeStyle = '#facc15'; ctx.lineWidth = 2;
+  ctx.strokeRect(g.x + b.x * g.w, g.y + b.y * g.h, b.w * g.w, b.h * g.h); ctx.setLineDash([]);
+  ctx.fillStyle = '#facc15'; ctx.font = '600 12px system-ui';
+  ctx.fillText('SERIAL', g.x + b.x * g.w + 4, g.y + b.y * g.h - 5);
+}
+
+/** Copy the part of the video inside the guide frame into cardCanvas. */
+function grabCard() {
+  const vw = video.videoWidth, vh = video.videoHeight; if (!vw || !vh) return false;
+  const g = guideRect(), scale = Math.max(g.cw / vw, g.ch / vh);
+  const ox = (g.cw - vw * scale) / 2, oy = (g.ch - vh * scale) / 2;
+  const sx = (g.x - ox) / scale, sy = (g.y - oy) / scale, sw = g.w / scale, sh = g.h / scale;
+  const outW = Math.min(1000, Math.round(sw));
+  cardCanvas.width = outW; cardCanvas.height = Math.round(outW * sh / sw);
+  cardCanvas.getContext('2d', { willReadFrequently: true }).drawImage(video, sx, sy, sw, sh, 0, 0, cardCanvas.width, cardCanvas.height);
+  return true;
+}
+
+async function startLive() {
+  if (!settings.key) { toast('Enter your access key in Settings first.', true); return; }
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();   // unlock audio on tap
+  } catch (e) {}
+  try {
+    live.stream = await navigator.mediaDevices.getUserMedia({
+      audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+  } catch (err) {
+    const blocked = isGas || err.name === 'NotAllowedError' || err.name === 'SecurityError';
+    $('camOff').innerHTML = `<div style="font-size:36px">🚫</div><div><b>Camera not available.</b><br>${
+      isGas ? 'Google blocks the live camera inside Apps Script pages. Open the scanner from your GitHub Pages link instead, or use <b>Photos (batch)</b>.'
+            : blocked ? 'Allow camera access for this site in your browser settings, then try again.' : esc(err.message)}</div>`;
+    return;
+  }
+  video.srcObject = live.stream; await video.play().catch(() => {});
+  live.track = live.stream.getVideoTracks()[0];
+  try {
+    const caps = live.track.getCapabilities ? live.track.getCapabilities() : {};
+    $('torchBtn').hidden = !caps.torch;
+    if (caps.focusMode && caps.focusMode.includes('continuous')) live.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+  } catch (e) {}
+  try { live.wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+  $('camOff').hidden = true; $('camctl').hidden = false;
+  live.running = true; live.lastSerial = null; live.cand = null; live.candCount = 0; live.prevSig = null;
+  $('startBtn').className = 'btn stop big'; $('startBtn').textContent = '■ Stop';
+  getWorker().catch(e => toast(e.message, true));
+  tick();
+}
+
+function stopLive() {
+  if (!live.running && !live.stream) return;
+  live.running = false; clearTimeout(live.timer);
+  if (live.stream) live.stream.getTracks().forEach(t => t.stop());
+  live.stream = null; live.track = null; live.torch = false; $('torchBtn').classList.remove('on');
+  try { live.wake && live.wake.release(); } catch (e) {} live.wake = null;
+  video.srcObject = null; $('camOff').hidden = false; $('camctl').hidden = true; setPill('');
+  overlay.getContext('2d').clearRect(0, 0, overlay.width, overlay.height);
+  $('startBtn').className = 'btn go big'; $('startBtn').textContent = '▶ Start scanning';
+}
+$('startBtn').onclick = () => live.running ? stopLive() : startLive();
+$('torchBtn').onclick = async () => {
+  if (!live.track) return; live.torch = !live.torch;
+  try { await live.track.applyConstraints({ advanced: [{ torch: live.torch }] }); $('torchBtn').classList.toggle('on', live.torch); } catch (e) { live.torch = false; }
+};
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopLive(); });
+
+async function tick() {
+  if (!live.running) return;
+  try { await processFrame(); } catch (e) { console.warn(e); setPill('⚠ ' + (e.message || e)); }
+  drawOverlay();
+  if (live.running) live.timer = setTimeout(tick, FRAME_INTERVAL);
+}
+
+async function processFrame() {
+  if (video.readyState < 2 || !grabCard()) return;
+  const det = detectCardType(cardCanvas, 0.06);
+  const present = det.type && det.fraction >= MIN_COLOR_FRACTION;
+  if (!present) {
+    if (++live.absent >= 2) { live.lastSerial = null; live.cand = null; live.candCount = 0; live.needClear = false; }
+    live.phase = 'search'; setPill('Hold a blue or green card inside the frame'); return;
+  }
+  live.absent = 0;
+  const sig = signature(cardCanvas), diff = sigDiff(live.prevSig, sig); live.prevSig = sig;
+  // After a capture, wait until the card is taken away (or a hand/new card clearly changes the view)
+  if (live.needClear) {
+    if (sigDiff(live.capSig, sig) > CHANGE_DIFF) live.needClear = false;
+    else { live.phase = 'same'; setPill('✓ Saved — put the next card in the frame'); return; }
+  }
+  if (diff > STABLE_DIFF) { live.phase = 'steady'; setPill('Hold steady…'); return; }
+
+  live.phase = 'read'; setPill(`${CARD[det.type].label} card · reading serial…`); drawOverlay();
+  const res = await readSerial(cardCanvas, SERIAL_BOX);
+  if (!live.running) return;
+  if (!res.serial) { live.cand = null; live.candCount = 0; setPill("Can't read serial — move closer or add light"); return; }
+  if (res.serial === live.lastSerial) { live.phase = 'same'; setPill(`✓ ${res.serial} done — next card`); return; }
+  if (res.serial === live.cand) live.candCount++; else { live.cand = res.serial; live.candCount = 1; }
+  if (live.candCount < CONFIRM_READS) { setPill(`Checking ${res.serial}…`); return; }
+
+  // Captured!
+  live.lastSerial = res.serial; live.cand = null; live.candCount = 0; live.phase = 'got';
+  live.needClear = true; live.capSig = sig;
+  setPill(`✓ ${CARD[det.type].label} · ${res.serial}`);
+  $('cam').classList.remove('flash'); void $('cam').offsetWidth; $('cam').classList.add('flash');
+  beep(true);
+  capture({ type: det.type, serial: res.serial, photo: settings.photo ? snapshot(cardCanvas) : null });
+}
+
+/* ======================= Pending capture & saving ======================= */
+const session = [];   // newest first
+let pending = null, pendingTimer = null;
+let nextId = 1;
+
+function newRecord(o) {
+  return Object.assign({ id: nextId++, type: null, serial: '', prize: 0, photo: null, status: 'new', row: null, time: new Date(), msg: '' }, o);
+}
+
+function capture(o) {
+  if (pending) commitPending();   // previous card saves as-is
+  pending = newRecord(o);
+  showPending();
+}
+
+function showPending() {
+  const p = pending; $('pending').hidden = !p; clearInterval(pendingTimer);
+  if (!p) return;
+  $('pType').className = 'badge ' + (p.type || 'NONE');
+  $('pType').textContent = p.type ? `${CARD[p.type].label} · ${fmtShort(CARD[p.type].price)}` : 'Colour?';
+  $('pSerial').value = p.serial;
+  renderPendingPrizes();
+  const delay = Number(settings.delay);
+  p.held = delay < 0; p.deadline = Date.now() + Math.max(0, delay) * 1000;
+  $('pHold').hidden = delay < 0;
+  $('pHint').innerHTML = delay < 0 ? 'Tap a prize (or <b>No win</b>) to save.' : 'Saves as <b>No win</b> automatically. Tap a prize if this card won.';
+  if (delay === 0) { commitPending(); return; }
+  updateBar();
+  pendingTimer = setInterval(updateBar, 100);
+}
+function updateBar() {
+  const p = pending; if (!p) return clearInterval(pendingTimer);
+  const total = Math.max(1, Number(settings.delay) * 1000);
+  if (p.held || Number(settings.delay) < 0) { $('pBar').style.width = '100%'; $('pBar').style.background = '#9ca3af'; $('pHold').textContent = '▶ Resume'; return; }
+  $('pBar').style.background = ''; $('pHold').textContent = '⏸ Hold';
+  const left = p.deadline - Date.now();
+  $('pBar').style.width = Math.max(0, left / total * 100) + '%';
+  if (left <= 0) commitPending();
+}
+function renderPendingPrizes() {
+  const p = pending; const list = PRIZES[p.type] || PRIZES.BLUE;
+  $('pPrizes').innerHTML = list.map(v => `<button class="prize-btn${v === 0 ? ' none' : ''}${p.prize === v ? ' sel' : ''}" data-v="${v}">${fmtShort(v)}</button>`).join('');
+  $('pPrizes').querySelectorAll('button').forEach(b => b.onclick = () => { pending.prize = Number(b.dataset.v); commitPending(); });
+}
+$('pType').onclick = () => {
+  if (!pending) return; pending.type = pending.type === 'BLUE' ? 'GREEN' : 'BLUE'; pending.held = true;
+  $('pType').className = 'badge ' + pending.type; $('pType').textContent = `${CARD[pending.type].label} · ${fmtShort(CARD[pending.type].price)}`;
+  renderPendingPrizes();
+};
+$('pSerial').onfocus = () => { if (pending) pending.held = true; };
+$('pSerial').oninput = e => { if (pending) pending.serial = e.target.value.toUpperCase().replace(/[^A-Z0-9\-]/g, ''); };
+$('pHold').onclick = () => { if (!pending) return; pending.held = !pending.held; pending.deadline = Date.now() + Math.max(1, Number(settings.delay)) * 1000; };
+$('pDiscard').onclick = () => { pending = null; showPending(); };
+$('pSave').onclick = () => commitPending();
+
+function commitPending() {
+  const p = pending; if (!p) return;
+  pending = null; showPending();
+  if (!p.type || !validSerial(p.serial)) { p.status = 'needs'; session.unshift(p); renderSession(); return; }
+  session.unshift(p); enqueue(p);
+}
+
+/* Save queue — keeps scanning while saves happen in the background */
+const queue = []; let active = 0; const MAX_ACTIVE = 2;
+function enqueue(rec) { rec.status = 'queued'; renderSession(); queue.push(rec); pump(); }
+async function pump() {
+  while (active < MAX_ACTIVE && queue.length) {
+    const rec = queue.shift(); active++;
+    saveRecord(rec).finally(() => { active--; pump(); });
+  }
+}
+async function saveRecord(rec, allowDuplicate = false) {
+  rec.status = 'saving'; renderSession();
+  try {
+    const res = await api('saveScan', { type: rec.type, serial: rec.serial, prize: rec.prize, scannedBy: settings.name, photo: rec.photo, allowDuplicate });
+    if (res.duplicate) { rec.status = 'dup'; rec.msg = 'Already saved ' + res.existing.timestamp; beep(false); }
+    else { rec.status = 'saved'; rec.row = res.row; rec.serial = res.serial; rec.photo = null; }
+  } catch (err) {
+    rec.status = 'error'; rec.msg = err.message || String(err);
+  }
+  renderSession();
+}
+
+function renderSession() {
+  const saved = session.filter(r => r.status === 'saved');
+  const won = saved.reduce((s, r) => s + r.prize, 0), winners = saved.filter(r => r.prize > 0).length;
+  $('sessStats').textContent = session.length ? `${saved.length} saved · ${winners} won · ${fmt(won)}` : '';
+  if (!session.length) { $('sessList').innerHTML = '<div class="empty">Scanned cards will appear here.</div>'; return; }
+  $('sessList').innerHTML = session.slice(0, 150).map(r => {
+    const t = r.time.toTimeString().slice(0, 8);
+    const prizes = (PRIZES[r.type] || PRIZES.BLUE).slice();
+    if (!prizes.includes(r.prize)) prizes.push(r.prize);
+    const sel = `<select data-id="${r.id}" class="prizeSel">${prizes.map(v => `<option value="${v}"${v === r.prize ? ' selected' : ''}>${v === 0 ? 'No win' : v.toLocaleString('en-US')}</option>`).join('')}<option value="other">Other…</option></select>`;
+    let st = '', extra = '';
+    if (r.status === 'queued' || r.status === 'saving') st = '<span class="st wait"><span class="spinner"></span> saving</span>';
+    else if (r.status === 'saved') st = `<span class="st ok">✓ saved</span><button class="del" data-act="del" data-id="${r.id}">Undo</button>`;
+    else if (r.status === 'dup') st = `<span class="st warn">⚠ ${esc(r.msg)}</span> <button class="btn sm" data-act="force" data-id="${r.id}">Save anyway</button>`;
+    else if (r.status === 'error') st = `<span class="st err">✗ ${esc(r.msg)}</span> <button class="btn sm" data-act="retry" data-id="${r.id}">Retry</button>`;
+    else if (r.status === 'needs') {
+      st = `<span class="st warn">✎ ${!r.type ? 'pick colour' : ''}${!r.type && !validSerial(r.serial) ? ' & ' : ''}${!validSerial(r.serial) ? 'type serial' : ''}</span>`;
+      extra = `<div class="fix"><input type="text" placeholder="Serial" value="${esc(r.serial)}" data-fix="${r.id}" autocapitalize="characters">
+        <button class="badge ${r.type === 'BLUE' ? 'BLUE' : ''}" data-act="setBLUE" data-id="${r.id}">Blue</button>
+        <button class="badge ${r.type === 'GREEN' ? 'GREEN' : ''}" data-act="setGREEN" data-id="${r.id}">Green</button>
+        <button class="btn sm primary" data-act="fixsave" data-id="${r.id}">Save</button></div>`;
+    }
+    return `<div class="item"><div class="main">
+        <div><span class="dot ${r.type || ''}"></span><span class="serial">${esc(r.serial || '—')}</span></div>
+        <div class="meta">${t} · ${r.type ? CARD[r.type].label : '?'} · ${st}</div>${extra}</div>
+        ${r.status === 'needs' ? '' : sel}</div>`;
+  }).join('');
+}
+
+const byId = id => session.find(r => r.id === Number(id));
+$('sessList').addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const r = byId(b.dataset.id); if (!r) return;
+  const act = b.dataset.act;
+  if (act === 'retry') enqueue(r);
+  else if (act === 'force') { saveRecord(r, true); }
+  else if (act === 'setBLUE' || act === 'setGREEN') { r.type = act.slice(3); renderSession(); }
+  else if (act === 'fixsave') {
+    const inp = document.querySelector(`[data-fix="${r.id}"]`);
+    r.serial = (inp ? inp.value : r.serial).toUpperCase().replace(/[^A-Z0-9\-]/g, '');
+    if (!r.type) return toast('Pick Blue or Green.', true);
+    if (!r.serial) return toast('Type the serial number.', true);
+    enqueue(r);
+  } else if (act === 'del') {
+    if (!await modal('Undo this scan?', `Remove ${r.serial} from the Google Sheet?`, 'Remove')) return;
+    try { await api('deleteScan', r.row, r.serial); session.splice(session.indexOf(r), 1); renderSession(); toast('Removed'); }
+    catch (err) { toast(err.message || String(err), true); }
+  }
+});
+$('sessList').addEventListener('input', e => {
+  if (e.target.dataset.fix) { const r = byId(e.target.dataset.fix); if (r) r.serial = e.target.value.toUpperCase(); }
+});
+$('sessList').addEventListener('change', async e => {
+  if (!e.target.classList.contains('prizeSel')) return;
+  const r = byId(e.target.dataset.id); if (!r) return;
+  let v = e.target.value;
+  if (v === 'other') {
+    const ok = await modal('Prize amount', `Serial ${r.serial}`, 'Set', '<input type="number" id="otherAmt" inputmode="numeric" min="0" placeholder="Kip">');
+    v = ok ? Number(($('otherAmt') || {}).value) : NaN;
+    if (!ok || !isFinite(v) || v < 0) { renderSession(); return; }
+  }
+  v = Number(v); const old = r.prize; r.prize = v;
+  if (r.status === 'saved' && r.row) {
+    try { await api('updatePrize', r.row, r.serial, v); toast(`${r.serial}: ${v ? 'won ' + fmt(v) : 'no win'}`); }
+    catch (err) { r.prize = old; toast(err.message || String(err), true); }
+  }
+  renderSession();
+});
+
+/* ============================== Batch photos ============================== */
+$('photoInput').onchange = async e => {
+  const files = [...(e.target.files || [])]; e.target.value = '';
+  if (!files.length) return;
+  if (!settings.key) { toast('Enter your access key in Settings first.', true); return; }
+  let ok = 0, fix = 0;
+  try { await getWorker(); } catch (err) { toast(err.message, true); }
+  for (let i = 0; i < files.length; i++) {
+    $('batchStatus').innerHTML = `<span class="spinner"></span> Reading photo ${i + 1} of ${files.length}…`;
+    let rec;
+    try {
+      const c = await fileToCanvas(files[i], 1800);
+      const det = detectCardType(c, 0.12);
+      let res = { serial: '' };
+      try { res = await readSerial(c, serialBoxInPhoto(c)); } catch (err) {}
+      if (!res.serial) { try { res = await readSerial(c, PHOTO_SERIAL_BOX); } catch (err) {} }
+      rec = newRecord({ type: det.type, serial: res.serial, photo: settings.photo ? snapshot(c) : null });
+    } catch (err) {
+      rec = newRecord({ status: 'needs', msg: 'Could not open photo' });
+    }
+    if (rec.type && validSerial(rec.serial)) { session.unshift(rec); enqueue(rec); ok++; }
+    else { rec.status = 'needs'; session.unshift(rec); renderSession(); fix++; }
+    await sleep(10);
+  }
+  $('batchStatus').textContent = `Done: ${ok} read automatically${fix ? `, ${fix} need a serial typed in (see list)` : ''}. Set prizes for winners in the list.`;
+};
+/** Find the blue/green card inside a photo; returns its box as fractions, or null. */
+function findCardBounds(src) {
+  const w = 200, h = Math.max(1, Math.round(src.height * w / src.width));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data, rows = new Array(h).fill(0), cols = new Array(w).fill(0);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4, r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+    const max = Math.max(r, g, b), delta = max - Math.min(r, g, b);
+    if (!delta || max < 0.2 || delta / max < 0.25) continue;
+    let hue = max === r ? 60 * (((g - b) / delta) % 6) : max === g ? 60 * ((b - r) / delta + 2) : 60 * ((r - g) / delta + 4);
+    if (hue < 0) hue += 360;
+    if (hue >= HUE.greenMin && hue <= HUE.blueMax) { rows[y]++; cols[x]++; }
+  }
+  const span = (arr, min) => { let a = arr.findIndex(v => v >= min), b = arr.length - 1; while (b > a && arr[b] < min) b--; return a < 0 ? null : [a, b]; };
+  const ry = span(rows, Math.max(3, Math.max(...rows) * 0.25)), rx = span(cols, Math.max(3, Math.max(...cols) * 0.25));
+  if (!ry || !rx || (rx[1] - rx[0]) < w * 0.15 || (ry[1] - ry[0]) < h * 0.15) return null;
+  return { x: rx[0] / w, y: ry[0] / h, w: (rx[1] - rx[0] + 1) / w, h: (ry[1] - ry[0] + 1) / h };
+}
+function serialBoxInPhoto(src) {
+  const cb = findCardBounds(src);
+  if (!cb) return PHOTO_SERIAL_BOX;
+  return { x: cb.x + SERIAL_BOX.x * cb.w, y: cb.y + SERIAL_BOX.y * cb.h, w: SERIAL_BOX.w * cb.w, h: SERIAL_BOX.h * cb.h };
+}
+function fileToCanvas(file, max) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); res(c);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('bad image')); };
+    img.src = url;
+  });
+}
+
+/* ================================ Dashboard ================================ */
+let range = '7d', chart = null;
+document.querySelectorAll('.chip').forEach(c => c.onclick = () => {
+  range = c.dataset.range; document.querySelectorAll('.chip').forEach(x => x.classList.toggle('sel', x === c)); loadDashboard();
+});
+async function loadDashboard() {
+  $('updated').textContent = 'Loading…';
+  try { render(await api('dashboard', range)); } catch (err) { $('updated').textContent = ''; toast(err.message || String(err), true); }
+}
+const signed = n => `<span class="${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n > 0 ? '+' : ''}${fmt(n)}</span>`;
+const pct = r => Math.round(r * 1000) / 10 + '%';
+function render(d) {
+  const t = d.total;
+  $('kCount').textContent = t.count.toLocaleString('en-US'); $('kSpent').textContent = fmt(t.spent);
+  $('kWon').textContent = fmt(t.won); $('kNet').innerHTML = signed(t.net);
+  $('kWinners').textContent = t.winners.toLocaleString('en-US'); $('kRate').textContent = pct(t.winRate);
+  $('kBig').textContent = t.biggest ? fmt(t.biggest) : '–';
+  $('typeCards').innerHTML = ['BLUE', 'GREEN'].map(k => {
+    const a = d[k.toLowerCase()];
+    return `<div class="tcard ${k}"><h4>${CARD[k].label} · ${fmt(CARD[k].price)}</h4><dl>
+      <dt>Cards</dt><dd>${a.count}</dd><dt>Spent</dt><dd>${fmt(a.spent)}</dd><dt>Won</dt><dd>${fmt(a.won)}</dd>
+      <dt>Net</dt><dd>${signed(a.net)}</dd><dt>Win rate</dt><dd>${pct(a.winRate)}</dd><dt>Top prize</dt><dd>${a.biggest ? fmt(a.biggest) : '–'}</dd></dl></div>`;
+  }).join('');
+  if (typeof Chart !== 'undefined') {
+    if (chart) chart.destroy();
+    chart = new Chart($('dailyChart'), {
+      type: 'bar',
+      data: { labels: d.daily.map(x => x.day.slice(5)), datasets: [
+        { label: 'Spent', data: d.daily.map(x => x.spent), backgroundColor: '#9ca3af', borderRadius: 4 },
+        { label: 'Won', data: d.daily.map(x => x.won), backgroundColor: '#16a34a', borderRadius: 4 }] },
+      options: { maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${fmt(c.raw)}` } } },
+        scales: { y: { beginAtZero: true, ticks: { callback: v => v >= 1000 ? (v / 1000) + 'k' : v } }, x: { grid: { display: false } } } }
+    });
+  }
+  $('tiers').innerHTML = d.prizeTiers.length
+    ? `<table><tr><th>Card</th><th class="num">Prize</th><th class="num">Times</th><th class="num">Total</th></tr>${d.prizeTiers.map(p =>
+        `<tr><td><span class="dot ${p.type}"></span>${CARD[p.type] ? CARD[p.type].label : p.type}</td><td class="num">${fmt(p.prize)}</td><td class="num">${p.count}</td><td class="num">${fmt(p.prize * p.count)}</td></tr>`).join('')}</table>`
+    : '<div class="empty">No winning cards in this period.</div>';
+  $('recent').innerHTML = d.recent.length ? d.recent.map(r => `<div class="item"><div class="main">
+      <div><span class="dot ${r.type}"></span><span class="serial">${esc(r.serial)}</span></div>
+      <div class="meta">${r.time}${r.by ? ' · ' + esc(r.by) : ''}${r.photo ? ` · <a class="link" href="${esc(r.photo)}" target="_blank">photo</a>` : ''}</div></div>
+      <div style="text-align:right">${r.prize > 0 ? '<b class="pos">' + fmt(r.prize) + '</b>' : '<span class="meta">No win</span>'}
+      <button class="del" data-row="${r.row}" data-serial="${esc(r.serial)}">Delete</button></div></div>`).join('')
+    : '<div class="empty">No scans yet in this period.</div>';
+  $('recent').querySelectorAll('.del').forEach(b => b.onclick = async () => {
+    if (!await modal('Delete scan?', `Remove serial ${b.dataset.serial} from the sheet?`, 'Delete')) return;
+    try { await api('deleteScan', Number(b.dataset.row), b.dataset.serial); toast('Deleted'); loadDashboard(); }
+    catch (err) { toast(err.message || String(err), true); }
+  });
+  $('sheetLink').href = d.sheetUrl; $('updated').textContent = 'Updated ' + d.generated;
+}
+
+/* ================================ Settings UI ================================ */
+function loadSettingsUI() {
+  $('urlWrap').hidden = !!isGas;
+  $('sUrl').value = settings.url; $('sKey').value = settings.key; $('sName').value = settings.name;
+  $('sDelay').value = settings.delay; $('sShape').value = settings.shape;
+  $('sPhoto').checked = !!settings.photo; $('sSound').checked = !!settings.sound;
+  $('setupNotice').hidden = !!settings.key && (isGas || !!settings.url);
+}
+[['sUrl', 'url'], ['sKey', 'key'], ['sName', 'name'], ['sDelay', 'delay'], ['sShape', 'shape']].forEach(([id, k]) =>
+  $(id).addEventListener('change', e => { settings[k] = e.target.value.trim(); saveSettings(); loadSettingsUI(); }));
+$('sPhoto').onchange = e => { settings.photo = e.target.checked; saveSettings(); };
+$('sSound').onchange = e => { settings.sound = e.target.checked; saveSettings(); };
+$('testBtn').onclick = async () => {
+  settings.url = $('sUrl').value.trim(); settings.key = $('sKey').value.trim(); saveSettings(); loadSettingsUI();
+  $('testResult').innerHTML = '<span class="spinner"></span> Testing…';
+  try { await api('ping'); $('testResult').innerHTML = '<span class="st ok">✓ Connected to your Google Sheet</span>'; }
+  catch (err) { $('testResult').innerHTML = `<span class="st err">✗ ${esc(err.message || err)}</span>`; }
+};
+$('copyLink').onclick = async () => {
+  if (isGas) return toast('Copy the link from the GitHub Pages version of the scanner.', true);
+  const link = location.origin + location.pathname + '?api=' + encodeURIComponent(settings.url) + '&key=' + encodeURIComponent(settings.key);
+  try { await navigator.clipboard.writeText(link); toast('Setup link copied'); }
+  catch (e) { await modal('Setup link', link, 'Done'); }
+};
+
+/* ================================== Init ================================== */
+loadSettingsUI();
+renderSession();
+window.addEventListener('resize', () => { if (live.running) drawOverlay(); });
+if (isGas) {   // live camera is blocked inside Apps Script — default to batch photos
+  document.querySelector('#modeSeg [data-mode="photos"]').click();
+}
+setTimeout(() => getWorker().catch(() => {}), 1500);   // warm up OCR
+</script>
+</body>
+</html>
