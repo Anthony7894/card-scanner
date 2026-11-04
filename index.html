@@ -148,7 +148,7 @@
       </div>
       <div class="off" id="camOff">
         <div style="font-size:42px">📷</div>
-        <div>Tap <b>Start scanning</b>, then hold each card inside the frame.<br>Cards are read and saved automatically.</div>
+        <div>Tap <b>Start scanning</b> and hold each card inside the frame —<br><b>blue cards sideways, green cards upright</b>.<br>Colour, serial and prize are read and saved automatically.</div>
       </div>
     </div>
     <div class="controls">
@@ -237,11 +237,6 @@
       <option value="5">After 5 seconds</option>
       <option value="-1">Never — I tap Save each time</option>
     </select>
-    <label class="f" for="sShape">Card shape (as you hold it)</label>
-    <select class="full" id="sShape">
-      <option value="portrait">Portrait (tall)</option>
-      <option value="landscape">Landscape (wide)</option>
-    </select>
     <label class="check"><input type="checkbox" id="sPhoto"> Save a photo of each card to Google Drive</label>
     <label class="check"><input type="checkbox" id="sSound"> Beep and vibrate on each capture</label>
   </div>
@@ -267,13 +262,16 @@ const PRIZES = {
   BLUE:  [0, 5000, 10000, 20000, 50000, 100000, 500000, 1000000],
   GREEN: [0, 10000, 20000, 50000, 100000, 200000, 1000000, 2000000]
 };
-// Where the serial number sits on the card, as fractions of the card (bottom-left).
-const SERIAL_BOX = { x: 0.02, y: 0.80, w: 0.60, h: 0.18 };
-// Fallback for batch photos when the card's edges can't be found.
-const PHOTO_SERIAL_BOX = { x: 0.02, y: 0.76, w: 0.60, h: 0.22 };
-const CARD_ASPECT = { portrait: 0.64, landscape: 1.56 };   // width / height
-const SERIAL_MIN_LEN = 6, SERIAL_MAX_LEN = 16;             // ignore readings outside this length
-const SERIAL_REGEX = null;                                 // e.g. /^\d{10}$/ to accept only 10-digit serials
+// Card layouts, as fractions of the card. Blue cards are wide (landscape), green cards are tall (portrait).
+//   serial = area containing the serial number (bottom-left), prize = area containing the 4 scratch boxes.
+const LAYOUT = {
+  BLUE:  { aspect: 1.59, serial: { x: 0.00, y: 0.76, w: 0.50, h: 0.24 }, prize: { x: 0.40, y: 0.64, w: 0.60, h: 0.36 } },
+  GREEN: { aspect: 0.66, serial: { x: 0.04, y: 0.83, w: 0.60, h: 0.17 }, prize: { x: 0.50, y: 0.52, w: 0.50, h: 0.48 } }
+};
+// Serial format printed on the cards, e.g. MM016-04067-51
+const SERIAL_REGEX = /^[A-Z]{2}\d{3}-\d{5}-\d{2}$/;
+const KNOWN_PREFIXES = ['MM'];      // serials normally start with these letters (used to break ties)
+const MATCHES_TO_WIN = 3;          // same amount must appear this many times in the scratch boxes
 const HUE = { greenMin: 70, split: 172, blueMax: 270 };    // colour boundaries (degrees)
 const MIN_COLOR_FRACTION = 0.15;   // share of the frame that must be blue/green to count as "card present"
 const STABLE_DIFF = 10;            // lower = must hold the phone steadier before reading
@@ -295,7 +293,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) { memStore[k] = v; } }
 };
 const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzVURRWCDP6eagKe4L7Pk2OJCl-M3E0B9gvUcGK3cjgPip3p8QZCl_jtBKHZa3Ab1nh8A/exec';   // your Apps Script /exec link
-const settings = Object.assign({ url: DEFAULT_API_URL, key: '', name: '', delay: '3', shape: 'portrait', photo: false, sound: true },
+const settings = Object.assign({ url: DEFAULT_API_URL, key: '', name: '', delay: '2', photo: false, sound: true },
   JSON.parse(store.get('lsSettings') || '{}'));
 if (!settings.url) settings.url = DEFAULT_API_URL;
 // Setup link support: ?api=...&key=...
@@ -396,82 +394,168 @@ function signature(src) {
 }
 function sigDiff(a, b) { if (!a || !b) return 255; let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; }
 
-/** Crop a box (fractions) from src, enlarge, Otsu-threshold for OCR. */
-function prepCrop(src, box, invert) {
-  const sx = Math.round(box.x * src.width), sy = Math.round(box.y * src.height);
-  const sw = Math.max(8, Math.round(box.w * src.width)), sh = Math.max(8, Math.round(box.h * src.height));
-  const scale = Math.min(4, Math.max(1, 1200 / sw));
+/** Crop a box (fractions) from src and enlarge it. Returns { c, ctx, img, gray }. */
+function cropGray(src, box, targetW) {
+  const sx = Math.max(0, Math.round(box.x * src.width)), sy = Math.max(0, Math.round(box.y * src.height));
+  const sw = Math.max(8, Math.min(src.width - sx, Math.round(box.w * src.width)));
+  const sh = Math.max(8, Math.min(src.height - sy, Math.round(box.h * src.height)));
+  const scale = Math.min(4, Math.max(1, targetW / sw));
   const c = document.createElement('canvas');
   c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
-  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
-  const hist = new Array(256).fill(0), gray = new Uint8Array(d.length / 4);
-  for (let i = 0, j = 0; i < d.length; i += 4, j++) { const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0; gray[j] = g; hist[g]++; }
-  const total = gray.length; let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data, gray = new Uint8Array(d.length / 4);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) gray[j] = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0;
+  return { c, ctx, img, gray };
+}
+function writeBinary(o, isInk) {
+  const d = o.img.data;
+  for (let j = 0, i = 0; j < o.gray.length; j++, i += 4) { const v = isInk(j) ? 0 : 255; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
+  o.ctx.putImageData(o.img, 0, 0);
+  return o.c;
+}
+/** Global (Otsu) threshold — good for dark text on the white serial label. */
+function prepCrop(src, box, invert) {
+  const o = cropGray(src, box, SERIAL_W), g = o.gray, hist = new Array(256).fill(0);
+  for (let j = 0; j < g.length; j++) hist[g[j]]++;
+  let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
   let sumB = 0, wB = 0, best = 0, thr = 128;
   for (let t = 0; t < 256; t++) {
-    wB += hist[t]; if (!wB) continue; const wF = total - wB; if (!wF) break;
+    wB += hist[t]; if (!wB) continue; const wF = g.length - wB; if (!wF) break;
     sumB += t * hist[t]; const mB = sumB / wB, mF = (sum - sumB) / wF, between = wB * wF * (mB - mF) ** 2;
     if (between > best) { best = between; thr = t; }
   }
-  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-    let v = gray[j] > thr ? 255 : 0; if (invert) v = 255 - v;
-    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  return c;
+  return writeBinary(o, j => invert ? g[j] > thr : g[j] <= thr);
+}
+/** Plain enlarged greyscale (lets the OCR engine do its own thresholding). */
+function prepGray(src, box) {
+  const o = cropGray(src, box, SERIAL_W), d = o.img.data;
+  for (let j = 0, i = 0; j < o.gray.length; j++, i += 4) { d[i] = d[i + 1] = d[i + 2] = o.gray[j]; }
+  o.ctx.putImageData(o.img, 0, 0);
+  return o.c;
+}
+/** Local (adaptive) threshold — keeps dark digits on the silver scratch boxes, drops busy backgrounds. */
+function prepAdaptive(src, box, targetW = 1400, k = 0.12) {
+  const o = cropGray(src, box, targetW), g = o.gray, W = o.c.width, H = o.c.height;
+  const integ = new Float64Array((W + 1) * (H + 1));
+  for (let y = 1; y <= H; y++) { let row = 0; for (let x = 1; x <= W; x++) { row += g[(y - 1) * W + x - 1]; integ[y * (W + 1) + x] = integ[(y - 1) * (W + 1) + x] + row; } }
+  const r = Math.max(8, Math.round(Math.min(W, H) / 10));
+  return writeBinary(o, j => {
+    const x = j % W, y = (j / W) | 0;
+    const x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1), y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
+    const mean = (integ[y1 * (W + 1) + x1] - integ[y0 * (W + 1) + x1] - integ[y1 * (W + 1) + x0] + integ[y0 * (W + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+    return g[j] < mean * (1 - k) && g[j] < 170;
+  });
 }
 
-function fixDigits(t) {
-  const digits = (t.match(/\d/g) || []).length;
-  if (t.length && digits / t.length >= 0.6) t = t.replace(/O/g, '0').replace(/[IL]/g, '1').replace(/S/g, '5').replace(/B/g, '8').replace(/Z/g, '2');
-  return t;
+const DIGIT_FIX = { O: '0', Q: '0', D: '0', I: '1', L: '1', T: '1', Z: '2', S: '5', B: '8', G: '6' };
+const LETTER_FIX = { 0: 'O', 1: 'I', 5: 'S', 8: 'B', 2: 'Z', 6: 'G' };
+function validSerial(s) { return !!s && SERIAL_REGEX.test(s); }
+/** Tidy a typed serial: MM01604067-51 / mm016 04067 51 → MM016-04067-51 */
+function normSerial(t) {
+  const c = String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const m = c.match(/^([A-Z]{2})(\d{3})(\d{5})(\d{2})$/);
+  return m ? `${m[1]}${m[2]}-${m[3]}-${m[4]}` : String(t || '').toUpperCase().trim();
 }
-function validSerial(s) { return !!s && s.length >= SERIAL_MIN_LEN && s.length <= SERIAL_MAX_LEN && (!SERIAL_REGEX || SERIAL_REGEX.test(s)); }
-function extractSerial(text) {
-  const cands = [];
-  const isNum = t => t.length > 0 && (t.match(/\d/g) || []).length / t.length >= 0.6;
+/** Find serials like MM016-04067-51 in OCR text, fixing common letter/digit mix-ups. Returns all candidates. */
+function serialCandidates(text) {
+  const D = '[0-9OQDILTZSBG]', out = [];
+  const re = new RegExp('(?=([A-Z0-9]{2})(' + D + '{3})[-_.~=]?(' + D + '{5})[-_.~=]?(' + D + '{2})(?![0-9]))', 'g');
   String(text).toUpperCase().split(/\n+/).forEach(line => {
-    const toks = line.replace(/[^A-Z0-9\-\s]/g, ' ').trim().split(/\s+/).filter(Boolean).map(fixDigits);
-    let run = [];
-    const flush = () => { if (run.length > 1) cands.push(run.join('')); run = []; };
-    toks.forEach(t => { cands.push(t); if (isNum(t)) run.push(t); else flush(); });
-    flush();   // serial printed in groups, e.g. "001 234 567"
+    const t = line.replace(/\s+/g, '');
+    let m;
+    while ((m = re.exec(t))) {
+      re.lastIndex = m.index + 1;
+      let pre = m[1].replace(/[0-9]/g, c => LETTER_FIX[c] || c);
+      if (KNOWN_PREFIXES.length) {
+        const near = KNOWN_PREFIXES.find(k => k === pre || k[0] === pre[0] || k[1] === pre[1]);
+        if (!near) continue;   // not a real serial
+        pre = near;            // e.g. MO016… → MM016… (one letter misread)
+      }
+      const fixes = (m[2] + m[3] + m[4]).replace(/[0-9]/g, '').length;
+      if (fixes > 2) continue; // too many letters where digits should be — probably not a serial
+      const num = s => s.replace(/[^0-9]/g, c => DIGIT_FIX[c] || c);
+      const cand = pre + num(m[2]) + '-' + num(m[3]) + '-' + num(m[4]);
+      if (validSerial(cand)) out.push(cand);
+    }
   });
-  let best = '', bestScore = -Infinity;
-  cands.forEach(t => {
-    if (!validSerial(t)) return;
-    const digits = (t.match(/\d/g) || []).length, score = digits - 2 * (t.length - digits);
-    if (score > bestScore) { best = t; bestScore = score; }
-  });
-  return best;
+  return out;
 }
-
-let workerP = null;
+const knownPrefix = s => KNOWN_PREFIXES.includes(s.slice(0, 2));
+function extractSerial(text) { const c = serialCandidates(text); return c.find(knownPrefix) || c[0] || ''; }
+/** Pull money amounts (e.g. 50,000) out of OCR text. Ignores junk stuck after the number. */
+function extractAmounts(text) {
+  const out = [];
+  const re = /(\d{1,3})((?:(?:\s?[,.]\s?|\s)\d{3})+)/g;
+  String(text).split(/\n+/).forEach(line => {
+    let m;
+    while ((m = re.exec(line))) {
+      const v = Number((m[1] + m[2]).replace(/\D/g, ''));
+      if (v >= 1000 && v <= 100000000 && v % 1000 === 0) out.push(v);
+    }
+  });
+  return out;
+}
+/** All amounts that exist on the cards (from the prize buttons). Other readings are treated as misreads. */
+const VALID_AMOUNTS = new Set([...PRIZES.BLUE, ...PRIZES.GREEN, 10000, 50000, 100000].filter(Boolean));
+/** Decide the prize: an amount that appears MATCHES_TO_WIN times wins. */
+function decidePrize(amounts) {
+  const valid = amounts.filter(v => VALID_AMOUNTS.has(v)), count = {};
+  valid.forEach(v => count[v] = (count[v] || 0) + 1);
+  const win = Object.keys(count).map(Number).filter(v => count[v] >= MATCHES_TO_WIN).sort((a, b) => b - a)[0];
+  if (win) return { prize: win, certain: true, amounts };
+  // "No win" is only trusted when all 4 boxes were read as real amounts
+  return { prize: 0, certain: valid.length === 4 && amounts.length === 4, amounts };
+}
+let workerP = null, ocrBusy = Promise.resolve();
 function getWorker() {
   if (!workerP) {
     workerP = (async () => {
       if (typeof Tesseract === 'undefined') throw new Error('OCR library did not load (check internet).');
-      const w = await Tesseract.createWorker('eng');
-      await w.setParameters({ tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ- ', tessedit_pageseg_mode: '6' });
-      return w;
+      return await Tesseract.createWorker('eng');
     })();
     workerP.catch(() => { workerP = null; });
   }
   return workerP;
 }
-async function readSerial(src, box) {
-  const w = await getWorker();
-  let best = { serial: '', conf: 0 };
-  for (const inv of [false, true]) {
-    const { data } = await w.recognize(prepCrop(src, box, inv));
-    const s = extractSerial(data.text);
-    if (s && data.confidence > best.conf) best = { serial: s, conf: data.confidence };
-    if (best.conf >= 70) break;
+/** Run OCR with the given settings (one job at a time). */
+function ocr(canvas, whitelist, psm) {
+  const job = ocrBusy.then(async () => {
+    const w = await getWorker();
+    await w.setParameters({ tessedit_char_whitelist: whitelist, tessedit_pageseg_mode: String(psm) });
+    const { data } = await w.recognize(canvas);
+    return data;
+  });
+  ocrBusy = job.catch(() => {});
+  return job;
+}
+const SERIAL_W = 750;   // OCR works best when the serial is scaled to about this width
+const SERIAL_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-';
+/** Read the serial several ways and vote. Returns { serial, votes, certain }. */
+async function readSerial(src, box, maxTries = 4) {
+  const variants = [b => prepAdaptive(src, b, SERIAL_W, 0.15), b => prepCrop(src, b, false), b => prepAdaptive(src, b, SERIAL_W, 0.08), b => prepGray(src, b)].slice(0, maxTries);
+  const tally = {};
+  for (const v of variants) {
+    const data = await ocr(v(box), SERIAL_CHARS, 6);
+    [...new Set(serialCandidates(data.text))].forEach(s => tally[s] = (tally[s] || 0) + 1);
+    const top = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+    if (top && top[1] >= 2) return { serial: top[0], votes: top[1], certain: true };
   }
-  return best;
+  const top = Object.entries(tally).sort((a, b) => b[1] - a[1] || knownPrefix(b[0]) - knownPrefix(a[0]))[0];
+  return top ? { serial: top[0], votes: top[1], certain: false } : { serial: '', votes: 0, certain: false };
+}
+async function readPrize(src, box) {
+  let noWin = null, best = null;
+  for (const k of [0.12, 0.2, 0.08]) {
+    const data = await ocr(prepAdaptive(src, box, 1400, k), '0123456789,.ABCDEFGHIJKLMNOPQRSTUVWXYZ', 11);
+    const r = decidePrize(extractAmounts(data.text));
+    if (r.prize) return r;                       // 3 matching amounts found — a win
+    if (r.certain) noWin = noWin || r;
+    if (!best || r.amounts.length > best.amounts.length) best = r;
+    if (noWin && k === 0.2) break;               // two clean reads without a win
+  }
+  return noWin || best;
 }
 function snapshot(src, max = 800) {
   const s = Math.min(1, max / Math.max(src.width, src.height));
@@ -496,20 +580,21 @@ function beep(ok = true) {
 /* ============================ Live scanning ============================ */
 const video = $('video'), overlay = $('overlay');
 const live = { running: false, stream: null, track: null, timer: null, prevSig: null, cand: null, candCount: 0,
-  lastSerial: null, absent: 0, phase: 'search', wake: null, torch: false, needClear: false, capSig: null };
+  lastSerial: null, absent: 0, phase: 'search', wake: null, torch: false, needClear: false, capSig: null,
+  gtype: 'BLUE', gvote: 0 };
 const cardCanvas = document.createElement('canvas');
 
 function setPill(text) { const p = $('pill'); p.hidden = !text; p.textContent = text || ''; }
 
 function guideRect() {
-  const cw = overlay.clientWidth, ch = overlay.clientHeight, A = CARD_ASPECT[settings.shape] || 0.64;
-  let gw = cw * 0.84, gh = gw / A;
+  const cw = overlay.clientWidth, ch = overlay.clientHeight, A = LAYOUT[live.gtype].aspect;
+  let gw = cw * 0.9, gh = gw / A;
   if (gh > ch * 0.84) { gh = ch * 0.84; gw = gh * A; }
-  return { x: (cw - gw) / 2, y: (ch - gh) / 2 + 12, w: gw, h: gh, cw, ch };
+  return { x: (cw - gw) / 2, y: (ch - gh) / 2 + 14, w: gw, h: gh, cw, ch };
 }
 
 function drawOverlay() {
-  const dpr = window.devicePixelRatio || 1, g = guideRect();
+  const dpr = window.devicePixelRatio || 1, g = guideRect(), L = LAYOUT[live.gtype];
   overlay.width = Math.round(g.cw * dpr); overlay.height = Math.round(g.ch * dpr);
   const ctx = overlay.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = 'rgba(0,0,0,.45)';
@@ -517,11 +602,16 @@ function drawOverlay() {
   const color = { search: '#ffffff', steady: '#ffffff', read: '#facc15', got: '#22c55e', same: '#9ca3af' }[live.phase] || '#fff';
   ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
   ctx.roundRect ? ctx.roundRect(g.x, g.y, g.w, g.h, 12) : ctx.rect(g.x, g.y, g.w, g.h); ctx.stroke();
-  const b = SERIAL_BOX;
-  ctx.setLineDash([6, 5]); ctx.strokeStyle = '#facc15'; ctx.lineWidth = 2;
-  ctx.strokeRect(g.x + b.x * g.w, g.y + b.y * g.h, b.w * g.w, b.h * g.h); ctx.setLineDash([]);
-  ctx.fillStyle = '#facc15'; ctx.font = '600 12px system-ui';
-  ctx.fillText('SERIAL', g.x + b.x * g.w + 4, g.y + b.y * g.h - 5);
+  ctx.setLineDash([6, 5]); ctx.lineWidth = 2; ctx.font = '600 11px system-ui';
+  [['SERIAL', L.serial, '#facc15'], ['PRIZES', L.prize, '#38bdf8']].forEach(([label, b, col]) => {
+    ctx.strokeStyle = col; ctx.fillStyle = col;
+    ctx.strokeRect(g.x + b.x * g.w + 2, g.y + b.y * g.h + 2, b.w * g.w - 4, b.h * g.h - 4);
+    ctx.fillText(label, g.x + b.x * g.w + 6, g.y + b.y * g.h + 14);
+  });
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#fff'; ctx.font = '600 13px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(live.gtype === 'BLUE' ? 'Blue card — hold it sideways' : 'Green card — hold it upright', g.cw / 2, g.y + g.h + 18 > g.ch - 4 ? g.ch - 6 : g.y + g.h + 18);
+  ctx.textAlign = 'left';
 }
 
 /** Copy the part of the video inside the guide frame into cardCanvas. */
@@ -530,10 +620,18 @@ function grabCard() {
   const g = guideRect(), scale = Math.max(g.cw / vw, g.ch / vh);
   const ox = (g.cw - vw * scale) / 2, oy = (g.ch - vh * scale) / 2;
   const sx = (g.x - ox) / scale, sy = (g.y - oy) / scale, sw = g.w / scale, sh = g.h / scale;
-  const outW = Math.min(1000, Math.round(sw));
+  const outW = Math.min(1100, Math.round(sw));
   cardCanvas.width = outW; cardCanvas.height = Math.round(outW * sh / sw);
   cardCanvas.getContext('2d', { willReadFrequently: true }).drawImage(video, sx, sy, sw, sh, 0, 0, cardCanvas.width, cardCanvas.height);
   return true;
+}
+/** Colour in the middle of the camera view decides which frame shape to show. */
+function centreType() {
+  const vw = video.videoWidth, vh = video.videoHeight, c = centreType.c || (centreType.c = document.createElement('canvas'));
+  c.width = 160; c.height = Math.round(160 * vh / vw);
+  c.getContext('2d', { willReadFrequently: true }).drawImage(video, vw * 0.2, vh * 0.2, vw * 0.6, vh * 0.6, 0, 0, c.width, c.height);
+  const d = detectCardType(c, 0);
+  return d.fraction >= MIN_COLOR_FRACTION ? d.type : null;
 }
 
 async function startLive() {
@@ -592,9 +690,13 @@ async function tick() {
 }
 
 async function processFrame() {
-  if (video.readyState < 2 || !grabCard()) return;
+  if (video.readyState < 2 || !video.videoWidth) return;
+  // 1. which card colour is in view? switch the frame shape after 2 agreeing frames
+  const ct = centreType();
+  if (ct && ct !== live.gtype) { if (++live.gvote >= 2) { live.gtype = ct; live.gvote = 0; live.prevSig = null; } } else live.gvote = 0;
+  if (!grabCard()) return;
   const det = detectCardType(cardCanvas, 0.06);
-  const present = det.type && det.fraction >= MIN_COLOR_FRACTION;
+  const present = det.type === live.gtype && det.fraction >= MIN_COLOR_FRACTION;
   if (!present) {
     if (++live.absent >= 2) { live.lastSerial = null; live.cand = null; live.candCount = 0; live.needClear = false; }
     live.phase = 'search'; setPill('Hold a blue or green card inside the frame'); return;
@@ -604,25 +706,32 @@ async function processFrame() {
   // After a capture, wait until the card is taken away (or a hand/new card clearly changes the view)
   if (live.needClear) {
     if (sigDiff(live.capSig, sig) > CHANGE_DIFF) live.needClear = false;
-    else { live.phase = 'same'; setPill('✓ Saved — put the next card in the frame'); return; }
+    else { live.phase = 'same'; setPill('✓ Done — next card'); return; }
   }
   if (diff > STABLE_DIFF) { live.phase = 'steady'; setPill('Hold steady…'); return; }
 
-  live.phase = 'read'; setPill(`${CARD[det.type].label} card · reading serial…`); drawOverlay();
-  const res = await readSerial(cardCanvas, SERIAL_BOX);
+  const type = live.gtype, L = LAYOUT[type];
+  live.phase = 'read'; setPill(`${CARD[type].label} card · reading serial…`); drawOverlay();
+  const frame = cropCanvas(cardCanvas, { x: 0, y: 0, w: 1, h: 1 });   // freeze this frame
+  const res = await readSerial(frame, L.serial, 3);
   if (!live.running) return;
   if (!res.serial) { live.cand = null; live.candCount = 0; setPill("Can't read serial — move closer or add light"); return; }
   if (res.serial === live.lastSerial) { live.phase = 'same'; setPill(`✓ ${res.serial} done — next card`); return; }
-  if (res.serial === live.cand) live.candCount++; else { live.cand = res.serial; live.candCount = 1; }
+  if (res.serial === live.cand) live.candCount += res.certain ? 2 : 1;
+  else { live.cand = res.serial; live.candCount = res.certain ? 2 : 1; }
   if (live.candCount < CONFIRM_READS) { setPill(`Checking ${res.serial}…`); return; }
 
-  // Captured!
-  live.lastSerial = res.serial; live.cand = null; live.candCount = 0; live.phase = 'got';
-  live.needClear = true; live.capSig = sig;
-  setPill(`✓ ${CARD[det.type].label} · ${res.serial}`);
+  // 2. serial confirmed — read the prize boxes on the same frame
+  live.lastSerial = res.serial; live.cand = null; live.candCount = 0;
+  setPill(`${res.serial} · reading prize…`);
+  const prize = await readPrize(frame, L.prize);
+  if (!live.running) return;
+  live.phase = 'got'; live.needClear = true; live.capSig = sig;
+  setPill(`✓ ${CARD[type].label} · ${res.serial} · ${prize.prize ? 'WON ' + fmt(prize.prize) : prize.certain ? 'no win' : 'prize?'}`);
   $('cam').classList.remove('flash'); void $('cam').offsetWidth; $('cam').classList.add('flash');
   beep(true);
-  capture({ type: det.type, serial: res.serial, photo: settings.photo ? snapshot(cardCanvas) : null });
+  capture({ type, serial: res.serial, prize: prize.prize, prizeCertain: prize.certain, amounts: prize.amounts,
+    photo: settings.photo ? snapshot(frame) : null });
 }
 
 /* ======================= Pending capture & saving ======================= */
@@ -647,11 +756,14 @@ function showPending() {
   $('pType').textContent = p.type ? `${CARD[p.type].label} · ${fmtShort(CARD[p.type].price)}` : 'Colour?';
   $('pSerial').value = p.serial;
   renderPendingPrizes();
-  const delay = Number(settings.delay);
-  p.held = delay < 0; p.deadline = Date.now() + Math.max(0, delay) * 1000;
-  $('pHold').hidden = delay < 0;
-  $('pHint').innerHTML = delay < 0 ? 'Tap a prize (or <b>No win</b>) to save.' : 'Saves as <b>No win</b> automatically. Tap a prize if this card won.';
-  if (delay === 0) { commitPending(); return; }
+  const delay = Number(settings.delay), unsure = p.prizeCertain === false;
+  p.held = delay < 0 || unsure; p.deadline = Date.now() + Math.max(0, delay) * 1000;
+  $('pHold').hidden = delay < 0 || unsure;
+  $('pHint').innerHTML = unsure
+      ? `⚠ Couldn't read all 4 prize boxes${p.amounts && p.amounts.length ? ' (saw ' + p.amounts.map(fmtShort).join(', ') + ')' : ''}. <b>Tap the prize</b> (or No win) to save.`
+    : p.prize ? `🎉 <b>Won ${fmt(p.prize)}</b> — 3 matching boxes. ${delay < 0 ? 'Tap it to save.' : 'Saves automatically.'}`
+    : delay < 0 ? 'No 3 matching amounts. Tap <b>No win</b> to save.' : 'No 3 matching amounts — saves as <b>No win</b> automatically.';
+  if (delay === 0 && !unsure) { commitPending(); return; }
   updateBar();
   pendingTimer = setInterval(updateBar, 100);
 }
@@ -665,9 +777,10 @@ function updateBar() {
   if (left <= 0) commitPending();
 }
 function renderPendingPrizes() {
-  const p = pending; const list = PRIZES[p.type] || PRIZES.BLUE;
+  const p = pending; const list = (PRIZES[p.type] || PRIZES.BLUE).slice();
+  if (!list.includes(p.prize)) list.push(p.prize);
   $('pPrizes').innerHTML = list.map(v => `<button class="prize-btn${v === 0 ? ' none' : ''}${p.prize === v ? ' sel' : ''}" data-v="${v}">${fmtShort(v)}</button>`).join('');
-  $('pPrizes').querySelectorAll('button').forEach(b => b.onclick = () => { pending.prize = Number(b.dataset.v); commitPending(); });
+  $('pPrizes').querySelectorAll('button').forEach(b => b.onclick = () => { pending.prize = Number(b.dataset.v); pending.prizeCertain = true; commitPending(); });
 }
 $('pType').onclick = () => {
   if (!pending) return; pending.type = pending.type === 'BLUE' ? 'GREEN' : 'BLUE'; pending.held = true;
@@ -675,7 +788,7 @@ $('pType').onclick = () => {
   renderPendingPrizes();
 };
 $('pSerial').onfocus = () => { if (pending) pending.held = true; };
-$('pSerial').oninput = e => { if (pending) pending.serial = e.target.value.toUpperCase().replace(/[^A-Z0-9\-]/g, ''); };
+$('pSerial').oninput = e => { if (pending) pending.serial = normSerial(e.target.value); };
 $('pHold').onclick = () => { if (!pending) return; pending.held = !pending.held; pending.deadline = Date.now() + Math.max(1, Number(settings.delay)) * 1000; };
 $('pDiscard').onclick = () => { pending = null; showPending(); };
 $('pSave').onclick = () => commitPending();
@@ -683,6 +796,7 @@ $('pSave').onclick = () => commitPending();
 function commitPending() {
   const p = pending; if (!p) return;
   pending = null; showPending();
+  p.serial = normSerial(p.serial);
   if (!p.type || !validSerial(p.serial)) { p.status = 'needs'; session.unshift(p); renderSession(); return; }
   session.unshift(p); enqueue(p);
 }
@@ -720,11 +834,11 @@ function renderSession() {
     const sel = `<select data-id="${r.id}" class="prizeSel">${prizes.map(v => `<option value="${v}"${v === r.prize ? ' selected' : ''}>${v === 0 ? 'No win' : v.toLocaleString('en-US')}</option>`).join('')}<option value="other">Other…</option></select>`;
     let st = '', extra = '';
     if (r.status === 'queued' || r.status === 'saving') st = '<span class="st wait"><span class="spinner"></span> saving</span>';
-    else if (r.status === 'saved') st = `<span class="st ok">✓ saved</span><button class="del" data-act="del" data-id="${r.id}">Undo</button>`;
+    else if (r.status === 'saved') st = (r.prizeCertain === false ? '<span class="st warn">⚠ check prize</span> ' : '') + `<span class="st ok">✓ saved</span><button class="del" data-act="del" data-id="${r.id}">Undo</button>`;
     else if (r.status === 'dup') st = `<span class="st warn">⚠ ${esc(r.msg)}</span> <button class="btn sm" data-act="force" data-id="${r.id}">Save anyway</button>`;
     else if (r.status === 'error') st = `<span class="st err">✗ ${esc(r.msg)}</span> <button class="btn sm" data-act="retry" data-id="${r.id}">Retry</button>`;
     else if (r.status === 'needs') {
-      st = `<span class="st warn">✎ ${!r.type ? 'pick colour' : ''}${!r.type && !validSerial(r.serial) ? ' & ' : ''}${!validSerial(r.serial) ? 'type serial' : ''}</span>`;
+      st = `<span class="st warn">✎ ${!r.type ? 'pick colour' : !validSerial(r.serial) ? 'type the serial (e.g. MM016-04067-51)' : 'check the serial, then Save'}${r.prizeCertain === false ? ' · check prize' : ''}</span>`;
       extra = `<div class="fix"><input type="text" placeholder="Serial" value="${esc(r.serial)}" data-fix="${r.id}" autocapitalize="characters">
         <button class="badge ${r.type === 'BLUE' ? 'BLUE' : ''}" data-act="setBLUE" data-id="${r.id}">Blue</button>
         <button class="badge ${r.type === 'GREEN' ? 'GREEN' : ''}" data-act="setGREEN" data-id="${r.id}">Green</button>
@@ -733,7 +847,7 @@ function renderSession() {
     return `<div class="item"><div class="main">
         <div><span class="dot ${r.type || ''}"></span><span class="serial">${esc(r.serial || '—')}</span></div>
         <div class="meta">${t} · ${r.type ? CARD[r.type].label : '?'} · ${st}</div>${extra}</div>
-        ${r.status === 'needs' ? '' : sel}</div>`;
+        ${sel}</div>`;
   }).join('');
 }
 
@@ -747,9 +861,10 @@ $('sessList').addEventListener('click', async e => {
   else if (act === 'setBLUE' || act === 'setGREEN') { r.type = act.slice(3); renderSession(); }
   else if (act === 'fixsave') {
     const inp = document.querySelector(`[data-fix="${r.id}"]`);
-    r.serial = (inp ? inp.value : r.serial).toUpperCase().replace(/[^A-Z0-9\-]/g, '');
+    r.serial = normSerial(inp ? inp.value : r.serial);
     if (!r.type) return toast('Pick Blue or Green.', true);
-    if (!r.serial) return toast('Type the serial number.', true);
+    if (!validSerial(r.serial)) return toast('Serial should look like MM016-04067-51.', true);
+    r.serialCertain = true;
     enqueue(r);
   } else if (act === 'del') {
     if (!await modal('Undo this scan?', `Remove ${r.serial} from the Google Sheet?`, 'Remove')) return;
@@ -769,7 +884,7 @@ $('sessList').addEventListener('change', async e => {
     v = ok ? Number(($('otherAmt') || {}).value) : NaN;
     if (!ok || !isFinite(v) || v < 0) { renderSession(); return; }
   }
-  v = Number(v); const old = r.prize; r.prize = v;
+  v = Number(v); const old = r.prize; r.prize = v; r.prizeCertain = true;
   if (r.status === 'saved' && r.row) {
     try { await api('updatePrize', r.row, r.serial, v); toast(`${r.serial}: ${v ? 'won ' + fmt(v) : 'no win'}`); }
     catch (err) { r.prize = old; toast(err.message || String(err), true); }
@@ -788,44 +903,136 @@ $('photoInput').onchange = async e => {
     $('batchStatus').innerHTML = `<span class="spinner"></span> Reading photo ${i + 1} of ${files.length}…`;
     let rec;
     try {
-      const c = await fileToCanvas(files[i], 1800);
-      const det = detectCardType(c, 0.12);
-      let res = { serial: '' };
-      try { res = await readSerial(c, serialBoxInPhoto(c)); } catch (err) {}
-      if (!res.serial) { try { res = await readSerial(c, PHOTO_SERIAL_BOX); } catch (err) {} }
-      rec = newRecord({ type: det.type, serial: res.serial, photo: settings.photo ? snapshot(c) : null });
+      const photo = await fileToCanvas(files[i], 2000);
+      const r = await analysePhoto(photo);
+      rec = newRecord({ type: r.type, serial: r.serial, serialCertain: r.serialCertain, prize: r.prize.prize, prizeCertain: r.prize.certain,
+        amounts: r.prize.amounts, photo: settings.photo ? snapshot(r.card || photo) : null });
     } catch (err) {
+      console.warn(err);
       rec = newRecord({ status: 'needs', msg: 'Could not open photo' });
     }
-    if (rec.type && validSerial(rec.serial)) { session.unshift(rec); enqueue(rec); ok++; }
+    if (rec.type && validSerial(rec.serial) && rec.serialCertain) { session.unshift(rec); enqueue(rec); ok++; }
     else { rec.status = 'needs'; session.unshift(rec); renderSession(); fix++; }
     await sleep(10);
   }
-  $('batchStatus').textContent = `Done: ${ok} read automatically${fix ? `, ${fix} need a serial typed in (see list)` : ''}. Set prizes for winners in the list.`;
+  const unsure = session.slice(0, files.length).filter(r => r.prizeCertain === false).length;
+  $('batchStatus').textContent = `Done: ${ok} saved automatically` + (fix ? `, ${fix} need you to check the serial` : '') +
+    (unsure ? `, ${unsure} with a prize to check (marked ⚠)` : '') + '.';
 };
-/** Find the blue/green card inside a photo; returns its box as fractions, or null. */
+
+/** Full pipeline for one photo: find card → colour → straighten → serial → prize. */
+async function analysePhoto(photo) {
+  let cb = findCardBounds(photo);
+  let region = cb ? cropCanvas(photo, padBox(cb, 0.02)) : photo;
+  const type = detectCardType(region, 0.1).type;
+  if (cb && type) {   // part of the card may be hidden (fingers, grey pictures): grow the box to the card's known shape
+    cb = fitAspect(cb, photo, LAYOUT[type].aspect);
+    region = cropCanvas(photo, padBox(cb, 0.02));
+  }
+  let card = region, sr = { serial: '', certain: false };
+  if (type) {
+    const L = LAYOUT[type], landscape = region.width > region.height;
+    const candidates = (landscape === (L.aspect > 1)) ? [region, rotate(region, 180)] : [rotate(region, 90), rotate(region, -90)];
+    const tries = [];
+    candidates.forEach(c => tries.push([c, L.serial]));
+    candidates.forEach(c => tries.push([c, { x: 0, y: 0.55, w: 1, h: 0.45 }]));   // wider area as a fallback
+    for (const [c, box] of tries) {
+      const r = await readSerial(c, box);
+      if (r.serial && (!sr.serial || (r.certain && !sr.certain))) { sr = r; card = c; }
+      if (sr.certain) break;
+    }
+  }
+  const serial = sr.serial;
+  let prize = { prize: 0, certain: false, amounts: [] };
+  if (type) {
+    prize = await readPrize(card, LAYOUT[type].prize);
+    if (!prize.certain) {   // try a slightly bigger area
+      const b = padBox(LAYOUT[type].prize, 0.06), r2 = await readPrize(card, b);
+      if (r2.certain || r2.amounts.length > prize.amounts.length) prize = r2;
+    }
+  }
+  return { type, serial, serialCertain: sr.certain, prize, card };
+}
+/** Grow box b (fractions of photo) to the card's known shape, in whichever orientation it lies. */
+function fitAspect(b, photo, aspect) {
+  const W = photo.width, H = photo.height, long = Math.max(aspect, 1 / aspect);
+  let x = b.x * W, y = b.y * H, w = b.w * W, h = b.h * H, tw, th;
+  if (h > w) { th = Math.max(h, w * long); tw = Math.max(w, h / long); }
+  else { tw = Math.max(w, h * long); th = Math.max(h, w / long); }
+  x -= (tw - w) / 2; y -= (th - h) / 2;
+  x = Math.max(0, x); y = Math.max(0, y);
+  return { x: x / W, y: y / H, w: Math.min(W - x, tw) / W, h: Math.min(H - y, th) / H };
+}
+function padBox(b, p) {
+  const x = Math.max(0, b.x - p), y = Math.max(0, b.y - p);
+  return { x, y, w: Math.min(1 - x, b.w + 2 * p), h: Math.min(1 - y, b.h + 2 * p) };
+}
+function cropCanvas(src, b) {
+  const c = document.createElement('canvas');
+  const sx = Math.round(b.x * src.width), sy = Math.round(b.y * src.height);
+  c.width = Math.max(1, Math.round(b.w * src.width)); c.height = Math.max(1, Math.round(b.h * src.height));
+  c.getContext('2d').drawImage(src, sx, sy, c.width, c.height, 0, 0, c.width, c.height);
+  return c;
+}
+function rotate(src, deg) {
+  const c = document.createElement('canvas'), q = Math.abs(deg) === 90;
+  c.width = q ? src.height : src.width; c.height = q ? src.width : src.height;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width / 2, c.height / 2); ctx.rotate(deg * Math.PI / 180);
+  ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  return c;
+}
+/** Longest band of rows/columns that are mostly card-coloured (tolerates small gaps). */
+function bestRun(arr, min, gap) {
+  let best = null, cur = null, miss = 0;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] >= min) { if (!cur) cur = { a: i, b: i, s: 0 }; cur.b = i; cur.s += arr[i]; miss = 0; }
+    else if (cur && ++miss > gap) { if (!best || cur.s > best.s) best = cur; cur = null; miss = 0; }
+  }
+  if (cur && (!best || cur.s > best.s)) best = cur;
+  return best;
+}
+/** Find the blue/green card inside a photo (largest connected patch of card colour); box as fractions, or null. */
 function findCardBounds(src) {
   const w = 200, h = Math.max(1, Math.round(src.height * w / src.width));
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   const ctx = c.getContext('2d', { willReadFrequently: true }); ctx.drawImage(src, 0, 0, w, h);
-  const d = ctx.getImageData(0, 0, w, h).data, rows = new Array(h).fill(0), cols = new Array(w).fill(0);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const i = (y * w + x) * 4, r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+  const d = ctx.getImageData(0, 0, w, h).data, mask = new Uint8Array(w * h);
+  for (let j = 0, i = 0; j < w * h; j++, i += 4) {
+    const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
     const max = Math.max(r, g, b), delta = max - Math.min(r, g, b);
-    if (!delta || max < 0.2 || delta / max < 0.25) continue;
+    if (!delta || max < 0.15 || delta / max < 0.16) continue;
     let hue = max === r ? 60 * (((g - b) / delta) % 6) : max === g ? 60 * ((b - r) / delta + 2) : 60 * ((r - g) / delta + 4);
     if (hue < 0) hue += 360;
-    if (hue >= HUE.greenMin && hue <= HUE.blueMax) { rows[y]++; cols[x]++; }
+    if (hue >= HUE.greenMin && hue <= HUE.blueMax) mask[j] = 1;
   }
-  const span = (arr, min) => { let a = arr.findIndex(v => v >= min), b = arr.length - 1; while (b > a && arr[b] < min) b--; return a < 0 ? null : [a, b]; };
-  const ry = span(rows, Math.max(3, Math.max(...rows) * 0.25)), rx = span(cols, Math.max(3, Math.max(...cols) * 0.25));
-  if (!ry || !rx || (rx[1] - rx[0]) < w * 0.15 || (ry[1] - ry[0]) < h * 0.15) return null;
-  return { x: rx[0] / w, y: ry[0] / h, w: (rx[1] - rx[0] + 1) / w, h: (ry[1] - ry[0] + 1) / h };
-}
-function serialBoxInPhoto(src) {
-  const cb = findCardBounds(src);
-  if (!cb) return PHOTO_SERIAL_BOX;
-  return { x: cb.x + SERIAL_BOX.x * cb.w, y: cb.y + SERIAL_BOX.y * cb.h, w: SERIAL_BOX.w * cb.w, h: SERIAL_BOX.h * cb.h };
+  // close small holes (text, pictures on the card) so the card is one piece
+  const R = 3, dil = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (!mask[y * w + x]) continue;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const yy = y + dy, xx = x + dx;
+      if (yy >= 0 && yy < h && xx >= 0 && xx < w) dil[yy * w + xx] = 1;
+    }
+  }
+  const seen = new Uint8Array(w * h); let best = null;
+  for (let start = 0; start < w * h; start++) {
+    if (!dil[start] || seen[start]) continue;
+    const stack = [start]; seen[start] = 1;
+    let n = 0, x0 = w, x1 = 0, y0 = h, y1 = 0;
+    while (stack.length) {
+      const j = stack.pop(), x = j % w, y = (j / w) | 0;
+      n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0 && dil[j - 1] && !seen[j - 1]) { seen[j - 1] = 1; stack.push(j - 1); }
+      if (x < w - 1 && dil[j + 1] && !seen[j + 1]) { seen[j + 1] = 1; stack.push(j + 1); }
+      if (y > 0 && dil[j - w] && !seen[j - w]) { seen[j - w] = 1; stack.push(j - w); }
+      if (y < h - 1 && dil[j + w] && !seen[j + w]) { seen[j + w] = 1; stack.push(j + w); }
+    }
+    if (!best || n > best.n) best = { n, x0, x1, y0, y1 };
+  }
+  if (!best || best.n < w * h * 0.05) return null;
+  const pad = R / w;
+  return padBox({ x: best.x0 / w + pad, y: best.y0 / h + pad, w: (best.x1 - best.x0 + 1) / w - 2 * pad, h: (best.y1 - best.y0 + 1) / h - 2 * pad }, 0);
 }
 function fileToCanvas(file, max) {
   return new Promise((res, rej) => {
@@ -897,11 +1104,11 @@ function render(d) {
 function loadSettingsUI() {
   $('urlWrap').hidden = !!isGas;
   $('sUrl').value = settings.url; $('sKey').value = settings.key; $('sName').value = settings.name;
-  $('sDelay').value = settings.delay; $('sShape').value = settings.shape;
+  $('sDelay').value = settings.delay;
   $('sPhoto').checked = !!settings.photo; $('sSound').checked = !!settings.sound;
   $('setupNotice').hidden = !!settings.key && (isGas || !!settings.url);
 }
-[['sUrl', 'url'], ['sKey', 'key'], ['sName', 'name'], ['sDelay', 'delay'], ['sShape', 'shape']].forEach(([id, k]) =>
+[['sUrl', 'url'], ['sKey', 'key'], ['sName', 'name'], ['sDelay', 'delay']].forEach(([id, k]) =>
   $(id).addEventListener('change', e => { settings[k] = e.target.value.trim(); saveSettings(); loadSettingsUI(); }));
 $('sPhoto').onchange = e => { settings.photo = e.target.checked; saveSettings(); };
 $('sSound').onchange = e => { settings.sound = e.target.checked; saveSettings(); };
